@@ -31,3 +31,37 @@ parts:
     plugin: uv
     build-snaps:
       - astral-uv
+  falco:
+    plugin: nil
+    override-build: |
+      # Use default craft build environment
+      craftctl default
+
+      # Set Falco version
+      # renovate: depName=canonical/falco-operator
+      VERSION=0.42.1
+      # Determine architecture
+      ARCH="$(uname -m)"
+      # Github release URL for Falco. The tarball is created in the build and release falco workflow:
+      # https//github.com/canonical/falco-operator/blob/main/.github/workflows/build_falco.yaml
+      # https//github.com/canonical/falco-operator/blob/main/.github/workflows/release_falco.yaml
+      DOWNLOAD_URL="https://github.com/canonical/falco-operator/releases/download/falco\/$VERSION/falco-$VERSION-$ARCH.tar.gz"
+
+      # Install falco
+      curl -s -L -o $CRAFT_PART_SRC/falco-$VERSION-$ARCH.tar.gz $DOWNLOAD_URL
+      tar -xvf $CRAFT_PART_SRC/falco-$VERSION-$ARCH.tar.gz -C $CRAFT_PART_BUILD/
+      cp -r $CRAFT_PART_BUILD/{etc,usr} $CRAFT_PART_INSTALL/
+    organize:
+      "*": falco/
+    stage:
+      - falco/usr/bin/falco
+      - falco/usr/share/falco/
+      - falco/etc/falco/default_rules/
+
+config:
+  options:
+
+requires:
+  general-info:
+    interface: juju-info
+    scope: container
