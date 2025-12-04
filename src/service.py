@@ -32,9 +32,9 @@ class FalcoLayout:
     packs. Also see `.github/workflows/build_falco.yaml`.
     """
 
-    cmd: Path = Path("usr/bin/falco")
-    plugins_dir: Path = Path("usr/share/falco/plugins")
-    default_rules_dir: Path = Path("etc/falco/default_rules")
+    _cmd: Path = Path("usr/bin/falco")
+    _plugins_dir: Path = Path("usr/share/falco/plugins")
+    _default_rules_dir: Path = Path("etc/falco/default_rules")
 
     def __init__(self, base_dir: Path) -> None:
         """Initialize Falco file layout.
@@ -45,15 +45,38 @@ class FalcoLayout:
         self.home = base_dir
         if not self.home.exists() or not self.home.is_dir():
             raise ValueError(f"Base directory {self.home} does not exist or is not a directory")
-
-        self.cmd = self.home / self.cmd
-        self.plugins_dir = self.home / self.plugins_dir
-        self.default_rules_dir = self.home / self.default_rules_dir
-
-        self.rules_dir = self.home / "etc/falco/rules.d"
-        self.config_file = self.home / "etc/falco/falco.yaml"
-
         self.rules_dir.mkdir(parents=True, exist_ok=True)
+        self.configs_dir.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def cmd(self) -> Path:
+        """Get the full path to the Falco command."""
+        return self.home / self._cmd
+
+    @property
+    def plugins_dir(self) -> Path:
+        """Get the full path to the Falco plugins directory."""
+        return self.home / self._plugins_dir
+
+    @property
+    def default_rules_dir(self) -> Path:
+        """Get the full path to the Falco default rules directory."""
+        return self.home / self._default_rules_dir
+
+    @property
+    def rules_dir(self) -> Path:
+        """Get the full path to the Falco rules directory."""
+        return self.home / "etc/falco/rules.d"
+
+    @property
+    def configs_dir(self) -> Path:
+        """Get the full path to the Falco configuration directory."""
+        return self.home / "etc/falco/config.overrides.d"
+
+    @property
+    def config_file(self) -> Path:
+        """Get the full path to the Falco configuration file."""
+        return self.home / "etc/falco/falco.yaml"
 
 
 class Template:
@@ -111,7 +134,7 @@ class FalcoServiceFile(Template):
     template: str = "falco.service.j2"
     service_file: Path = SYSTEMD_SERVICE_DIR / f"{FALCO_SERVICE_NAME}.service"
 
-    def __init__(self, falco_layout: FalcoLayout) -> None:
+    def __init__(self, falco_layout: FalcoLayout, charm: CharmBase) -> None:
         """Initialize the Falco service file manager."""
         super().__init__(
             self.template,
@@ -120,6 +143,8 @@ class FalcoServiceFile(Template):
                 "command": str(falco_layout.cmd),
                 "rules_dir": str(falco_layout.rules_dir),
                 "config_file": str(falco_layout.config_file),
+                "falco_home": str(falco_layout.home),
+                "juju_topology": JujuTopology.from_charm(charm).as_dict(),
             },
         )
 
@@ -129,14 +154,13 @@ class FalcoConfig(Template):
 
     template: str = "falco.yaml.j2"
 
-    def __init__(self, falco_layout: FalcoLayout, charm: CharmBase) -> None:
+    def __init__(self, falco_layout: FalcoLayout) -> None:
         """Initialize the Falco config file manager."""
         super().__init__(
             self.template,
             falco_layout.config_file,
             context={
                 "falco_home": str(falco_layout.home),
-                "juju_topology": JujuTopology.from_charm(charm).as_dict(),
             },
         )
 

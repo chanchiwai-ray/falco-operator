@@ -135,6 +135,9 @@ disallow_untyped_defs = false
 module = "tests.*"
 
 [tool.bandit]
+# B404: import subprocess is not allowed
+# B603: subprocess call with shell=False identified is also not allowed
+skips = ["B404", "B603"]
 exclude_dirs = [ "/venv/" ]
 
 [tool.bandit.assert_used]

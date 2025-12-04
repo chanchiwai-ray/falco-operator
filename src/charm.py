@@ -9,7 +9,9 @@ import logging
 import typing
 
 import ops
+import pydantic
 
+from config import CharmConfig, GitCloneError, RsyncError, SettingRepoManager, SshKeyScanError
 from service import FalcoConfig, FalcoLayout, FalcoService, FalcoServiceFile
 
 logger = logging.getLogger(__name__)
@@ -27,8 +29,8 @@ class Charm(ops.CharmBase):
         super().__init__(*args)
 
         self.falco_layout = FalcoLayout(base_dir=self.charm_dir / "falco")
-        self.falco_service_file = FalcoServiceFile(self.falco_layout)
-        self.managed_falco_config = FalcoConfig(self.falco_layout, self)
+        self.falco_service_file = FalcoServiceFile(self.falco_layout, self)
+        self.managed_falco_config = FalcoConfig(self.falco_layout)
         self.falco_service = FalcoService(self.managed_falco_config, self.falco_service_file)
 
         self.framework.observe(self.on.remove, self._on_remove)
@@ -36,23 +38,45 @@ class Charm(ops.CharmBase):
         self.framework.observe(self.on.upgrade_charm, self._on_install_or_upgrade)
         self.framework.observe(self.on.update_status, self._update_status)
 
+        self.framework.observe(self.on.config_changed, self.reconcile)
+        self.framework.observe(self.on.secret_changed, self.reconcile)
+
     def _on_remove(self, _: ops.RemoveEvent) -> None:
         """Handle remove event."""
         self.unit.status = ops.MaintenanceStatus("Removing Falco service")
         self.falco_service.remove()
 
-    def _on_install_or_upgrade(self, _: ops.InstallEvent | ops.UpgradeCharmEvent) -> None:
+    def _on_install_or_upgrade(self, event: ops.InstallEvent | ops.UpgradeCharmEvent) -> None:
         """Handle install or upgrade charm event."""
         self.unit.status = ops.MaintenanceStatus("Installing Falco service")
         self.falco_service.install()
-        self.reconcile()
+        self.reconcile(event)
 
-    def _update_status(self, _: ops.UpdateStatusEvent) -> None:
+    def _update_status(self, event: ops.UpdateStatusEvent) -> None:
         """Update the unit status."""
-        self.reconcile()
+        self.reconcile(event)
 
-    def reconcile(self) -> None:
+    def _configure(self) -> None:
+        """Configure the Falco service."""
+        charm_config = self.load_config(CharmConfig)
+        if not charm_config.setting_repo:
+            logger.info("No custom setting repository configured")
+            return
+
+        try:
+            setting_repo_manager = SettingRepoManager(self.model, charm_config)
+            setting_repo_manager.sync(self.falco_layout)
+            self.falco_service.configure()
+        except pydantic.ValidationError as e:
+            logger.exception("Configuration validation error: %s", e)
+            self.unit.status = ops.BlockedStatus("Invalid configuration")
+        except (ValueError, GitCloneError, SshKeyScanError, RsyncError) as e:
+            logger.exception("Failed to clone custom setting repository: %s", e)
+            self.unit.status = ops.BlockedStatus("Failed to clone setting repo")
+
+    def reconcile(self, _: ops.EventBase) -> None:
         """Reconcile the charm state."""
+        self._configure()
         if not self.falco_service.check_active():
             raise RuntimeError("Falco service is not running")
         self.unit.status = ops.ActiveStatus()

@@ -62,21 +62,24 @@ config:
   options:
     setting-repo:
       type: string
+      default: ""
       description: |
         A remote git repository for custom falco rules and falco configuration to customize falco operator.
-        The format of the config option must be `<schema>://<user>@<host>/<path>[@[branch|tag]][@[sub_path]]`.
+        The format of the config option must be `<schema>://<user>@<host>/<path>[?ref=<branch>][&sub_path=<sub_path>]`.
         For example,
         * `git+ssh://git@github.com/canoincal/falco-operator.git`.
-        * `git+ssh://git@github.com/canoincal/falco-operator.git@main`.
-        * `git+ssh://git@github.com/canoincal/falco-operator.git@production@/src/mainfests`.
+        * `git+ssh://git@github.com/canoincal/falco-operator.git?ref=main`.
+        * `git+ssh://git@github.com/canoincal/falco-operator.git?ref=production&sub_path=/src/manifests`.
 
         The repository should have the following structure
 
-        setting-repo/sub_path/
-          ├── falco.yaml
-          └── rules.d
-              ├── a.yaml
-              └── b.yaml
+        settting-repo/sub_path
+        ├── config.override.d/
+        │   ├── a.yaml
+        │   └── b.yaml
+        └── rules.d/
+            ├── a.yaml
+            └── b.yaml
 
         If the repository is not public, SSH key should be provided via secret, and the secret ID should be set in
         `setting-repo-ssh-key-id`.
