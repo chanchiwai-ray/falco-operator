@@ -77,11 +77,11 @@ class Charm(ops.CharmBase):
         try:
             self._configure()
         except pydantic.ValidationError as e:
-            logger.exception("Configuration validation error: %s", e)
+            logger.error("Configuration validation error: %s", e)
             self.unit.status = ops.BlockedStatus("Invalid configuration")
             return
         except (ValueError, GitCloneError, SshKeyScanError, RsyncError) as e:
-            logger.exception("Failed to clone custom setting repository: %s", e)
+            logger.error("Failed to clone custom setting repository: %s", e)
             self.unit.status = ops.BlockedStatus("Failed to clone setting repo")
             return
 

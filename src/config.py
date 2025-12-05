@@ -243,7 +243,7 @@ class SettingRepoManager:
             subprocess.run(git_clone_cmd, check=True)
         except subprocess.CalledProcessError as e:
             logging.exception("Git clone of repository failed for repo %s", self.working_dir)
-            raise GitCloneError(f"Git clone of setting repository failed: {e.stderr}") from e
+            raise GitCloneError(f"Git clone of setting repository failed: {e}") from e
 
     def _get_cloned_repo_url(self) -> str:
         """Get the cloned repository URL.
