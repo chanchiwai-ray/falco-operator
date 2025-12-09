@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pydantic import AnyUrl
 
+import service
 from service import (
     CLONE_OUTPUT_DIR,
     FALCO_CUSTOM_CONFIGS_KEY,
@@ -185,251 +186,6 @@ class TestFalcoCustomSetting:
         # Verify rsync was called
         mock_subprocess.run.assert_called()
 
-    @patch("service.subprocess.run")
-    def test_pull_falco_rule_files_rsync_error(self, mock_run, mock_falco_layout):
-        """Test _pull_falco_rule_files handles rsync error."""
-        custom_setting = FalcoCustomSetting(mock_falco_layout)
-
-        mock_run.side_effect = subprocess.CalledProcessError(1, "rsync")
-
-        with pytest.raises(RsyncError):
-            custom_setting._pull_falco_rule_files()
-
-    @patch("service.subprocess.run")
-    def test_pull_falco_config_files_rsync_error(self, mock_run, mock_falco_layout):
-        """Test _pull_falco_config_files handles rsync error."""
-        custom_setting = FalcoCustomSetting(mock_falco_layout)
-
-        mock_run.side_effect = subprocess.CalledProcessError(1, "rsync")
-
-        with pytest.raises(RsyncError):
-            custom_setting._pull_falco_config_files()
-
-    @patch("service.subprocess")
-    @patch("service.shutil")
-    def test_git_clone_success(self, mock_shutil, mock_subprocess, mock_falco_layout):
-        """Test _git_clone with successful clone."""
-        custom_setting = FalcoCustomSetting(mock_falco_layout)
-
-        custom_setting._git_clone("git+ssh://git@github.com/user/repo.git", ref="main")
-
-        mock_shutil.rmtree.assert_called_once()
-        mock_subprocess.run.assert_called_once()
-
-        # Verify git clone command
-        call_args = mock_subprocess.run.call_args[0][0]
-        assert "clone" in call_args
-        assert "--depth" in call_args
-        assert "1" in call_args
-        assert "-b" in call_args
-        assert "main" in call_args
-
-    @patch("service.subprocess.run")
-    @patch("service.shutil")
-    def test_git_clone_error(self, mock_shutil, mock_run, mock_falco_layout):
-        """Test _git_clone handles clone error."""
-        custom_setting = FalcoCustomSetting(mock_falco_layout)
-
-        mock_run.side_effect = subprocess.CalledProcessError(1, "git")
-
-        with pytest.raises(GitCloneError):
-            custom_setting._git_clone("git+ssh://git@github.com/user/repo.git")
-
-    @patch("service.subprocess")
-    def test_setup_ssh_key_success(self, mock_subprocess, mock_falco_layout, tmp_path):
-        """Test _setup_ssh_key writes key correctly."""
-        # Use a temporary file for testing
-        test_ssh_key_file = tmp_path / "id_rsa"
-
-        with patch("service.SSH_KEY_FILE", test_ssh_key_file):
-            custom_setting = FalcoCustomSetting(mock_falco_layout)
-
-            ssh_key = "-----BEGIN RSA PRIVATE KEY-----\ntest\n-----END RSA PRIVATE KEY-----"
-            custom_setting._setup_ssh_key(ssh_key)
-
-            assert test_ssh_key_file.exists()
-            assert test_ssh_key_file.read_text() == ssh_key
-            # Check permissions (0o600)
-            assert oct(os.stat(test_ssh_key_file).st_mode)[-3:] == "600"
-
-    def test_setup_ssh_key_write_error(self, mock_falco_layout, tmp_path):
-        """Test _setup_ssh_key handles write error."""
-        # Use a read-only directory
-        readonly_dir = tmp_path / "readonly"
-        readonly_dir.mkdir()
-        readonly_dir.chmod(0o444)
-        test_ssh_key_file = readonly_dir / "id_rsa"
-
-        with patch("service.SSH_KEY_FILE", test_ssh_key_file):
-            custom_setting = FalcoCustomSetting(mock_falco_layout)
-
-            with pytest.raises(SshKeyWriteError):
-                custom_setting._setup_ssh_key("test key")
-
-        # Cleanup
-        readonly_dir.chmod(0o755)
-
-    @patch("service.subprocess")
-    def test_add_known_hosts_success(self, mock_subprocess, mock_falco_layout, tmp_path):
-        """Test _add_known_hosts adds host key."""
-        test_known_hosts = tmp_path / "known_hosts"
-
-        mock_subprocess.check_output.return_value = b"github.com ssh-rsa AAAA..."
-
-        with patch("service.KNOWN_HOSTS_FILE", test_known_hosts):
-            custom_setting = FalcoCustomSetting(mock_falco_layout)
-
-            custom_setting._add_known_hosts("github.com")
-
-            assert test_known_hosts.exists()
-            assert "github.com ssh-rsa AAAA..." in test_known_hosts.read_text()
-
-    @patch("service.subprocess.check_output")
-    def test_add_known_hosts_keyscan_error(self, mock_check_output, mock_falco_layout):
-        """Test _add_known_hosts handles keyscan error."""
-        custom_setting = FalcoCustomSetting(mock_falco_layout)
-
-        mock_check_output.side_effect = subprocess.CalledProcessError(1, "ssh-keyscan")
-
-        with pytest.raises(SshKeyScanError):
-            custom_setting._add_known_hosts("github.com")
-
-    @patch("service.subprocess.check_output")
-    def test_add_known_hosts_write_error(self, mock_check_output, mock_falco_layout, tmp_path):
-        """Test _add_known_hosts handles write error."""
-        readonly_dir = tmp_path / "readonly"
-        readonly_dir.mkdir()
-        readonly_dir.chmod(0o444)
-        test_known_hosts = readonly_dir / "known_hosts"
-
-        mock_check_output.return_value = b"host key"
-
-        with patch("service.KNOWN_HOSTS_FILE", test_known_hosts):
-            custom_setting = FalcoCustomSetting(mock_falco_layout)
-
-            # OSError is caught and re-raised as SshKeyScanError
-            with pytest.raises(SshKeyScanError):
-                custom_setting._add_known_hosts("github.com")
-
-        # Cleanup
-        readonly_dir.chmod(0o755)
-
-    @patch("service.subprocess")
-    def test_get_cloned_repo_url_success(self, mock_subprocess, mock_falco_layout):
-        """Test _get_cloned_repo_url returns URL."""
-        custom_setting = FalcoCustomSetting(mock_falco_layout)
-
-        mock_subprocess.check_output.return_value = b"git+ssh://git@github.com/user/repo.git\n"
-
-        url = custom_setting._get_cloned_repo_url()
-        assert url == "git+ssh://git@github.com/user/repo.git"
-
-    @patch("service.subprocess.check_output")
-    def test_get_cloned_repo_url_not_cloned(self, mock_check_output, mock_falco_layout):
-        """Test _get_cloned_repo_url when repo not cloned."""
-        custom_setting = FalcoCustomSetting(mock_falco_layout)
-
-        mock_check_output.side_effect = subprocess.CalledProcessError(1, "git")
-
-        url = custom_setting._get_cloned_repo_url()
-        assert url == ""
-
-    @patch("service.subprocess")
-    def test_get_cloned_repo_tag_success(self, mock_subprocess, mock_falco_layout):
-        """Test _get_cloned_repo_tag returns tag."""
-        custom_setting = FalcoCustomSetting(mock_falco_layout)
-
-        mock_subprocess.check_output.return_value = b"v1.0.0\n"
-
-        tag = custom_setting._get_cloned_repo_tag()
-        assert tag == "v1.0.0"
-
-    @patch("service.subprocess.check_output")
-    def test_get_cloned_repo_tag_no_tag(self, mock_check_output, mock_falco_layout):
-        """Test _get_cloned_repo_tag when no tag exists."""
-        custom_setting = FalcoCustomSetting(mock_falco_layout)
-
-        mock_check_output.side_effect = subprocess.CalledProcessError(1, "git")
-
-        tag = custom_setting._get_cloned_repo_tag()
-        assert tag == ""
-
-    @patch("service.subprocess")
-    def test_git_sync_already_synced(self, mock_subprocess, mock_falco_layout):
-        """Test _git_sync returns early if repo already synced."""
-        custom_setting = FalcoCustomSetting(mock_falco_layout)
-
-        # Mock that repo is already cloned with same URL and tag
-        def check_output_side_effect(cmd, *args, **kwargs):
-            if "config" in cmd:
-                return b"git+ssh://git@github.com/user/repo.git\n"
-            elif "describe" in cmd:
-                return b"v1.0\n"
-            return b""
-
-        mock_subprocess.check_output.side_effect = check_output_side_effect
-
-        result = custom_setting._git_sync(
-            "git+ssh://git@github.com/user/repo.git", "github.com", ref="v1.0"
-        )
-
-        assert result is True
-        # Should not call run (git clone) if already synced
-        mock_subprocess.run.assert_not_called()
-
-    @patch("service.subprocess.check_output")
-    @patch("service.subprocess.run")
-    def test_git_sync_with_ssh_key(self, mock_run, mock_check_output, mock_falco_layout, tmp_path):
-        """Test _git_sync sets up SSH key when provided."""
-        test_ssh_key_file = tmp_path / "id_rsa"
-        test_known_hosts = tmp_path / "known_hosts"
-
-        with (
-            patch("service.SSH_KEY_FILE", test_ssh_key_file),
-            patch("service.KNOWN_HOSTS_FILE", test_known_hosts),
-        ):
-            custom_setting = FalcoCustomSetting(mock_falco_layout)
-
-            # Mock check_output calls: repo URL check, tag check, and keyscan
-            # _git_sync calls _get_cloned_repo_url, _get_cloned_repo_tag, and _add_known_hosts
-            mock_check_output.side_effect = [
-                subprocess.CalledProcessError(1, "git"),  # get_cloned_repo_url
-                subprocess.CalledProcessError(1, "git"),  # get_cloned_repo_tag
-                b"github.com ssh-rsa AAAA...\n",  # add_known_hosts
-            ]
-
-            custom_setting._git_sync(
-                "git+ssh://git@github.com/user/repo.git", "github.com", ssh_private_key="test-key"
-            )
-
-            # Verify SSH key was written
-            assert test_ssh_key_file.exists()
-            assert test_ssh_key_file.read_text() == "test-key"
-
-    @patch("service.subprocess.check_output")
-    @patch("service.subprocess.run")
-    def test_git_sync_without_ssh_key(
-        self, mock_run, mock_check_output, mock_falco_layout, tmp_path
-    ):
-        """Test _git_sync without SSH key (e.g., public repo)."""
-        test_known_hosts = tmp_path / "known_hosts"
-
-        with patch("service.KNOWN_HOSTS_FILE", test_known_hosts):
-            custom_setting = FalcoCustomSetting(mock_falco_layout)
-
-            # Mock check_output calls
-            mock_check_output.side_effect = [
-                subprocess.CalledProcessError(1, "git"),  # get_cloned_repo_url
-                subprocess.CalledProcessError(1, "git"),  # get_cloned_repo_tag
-                b"github.com ssh-rsa AAAA...\n",  # add_known_hosts
-            ]
-
-            # Call without ssh_private_key parameter
-            custom_setting._git_sync("https://github.com/user/repo.git", "github.com")
-
-            # Verify git clone was called
-            mock_run.assert_called_once()
-
 
 class TestFalcoServiceEdgeCases:
     """Test edge cases for FalcoService."""
@@ -530,3 +286,217 @@ class TestFalcoService:
         service = FalcoService(mock_config, mock_service_file, mock_custom_setting)
         assert service.check_active() is False
         mock_systemd.service_running.assert_called_once_with(FALCO_SERVICE_NAME)
+
+
+class TestUtilityFunctions:
+    """Test utility functions in service module."""
+
+    @patch("service.subprocess.run")
+    def test_pull_falco_rule_files_rsync_error(self, mock_run):
+        """Test _pull_falco_rule_files handles rsync error."""
+        mock_run.side_effect = subprocess.CalledProcessError(1, "rsync")
+
+        with pytest.raises(RsyncError):
+            service._pull_falco_rule_files("/dummy/destination")
+
+    @patch("service.subprocess.run")
+    def test_pull_falco_config_files_rsync_error(self, mock_run):
+        """Test _pull_falco_config_files handles rsync error."""
+        mock_run.side_effect = subprocess.CalledProcessError(1, "rsync")
+
+        with pytest.raises(RsyncError):
+            service._pull_falco_config_files("/dummy/destination")
+
+    @patch("service.subprocess")
+    @patch("service.shutil")
+    def test_git_clone_success(self, mock_shutil, mock_subprocess):
+        """Test _git_clone with successful clone."""
+        service._git_clone("git+ssh://git@github.com/user/repo.git", ref="main")
+
+        mock_shutil.rmtree.assert_called_once()
+        mock_subprocess.run.assert_called_once()
+
+        # Verify git clone command
+        call_args = mock_subprocess.run.call_args[0][0]
+        assert "clone" in call_args
+        assert "--depth" in call_args
+        assert "1" in call_args
+        assert "-b" in call_args
+        assert "main" in call_args
+
+    @patch("service.subprocess.run")
+    @patch("service.shutil")
+    def test_git_clone_error(self, mock_shutil, mock_run):
+        """Test _git_clone handles clone error."""
+        mock_run.side_effect = subprocess.CalledProcessError(1, "git")
+
+        with pytest.raises(GitCloneError):
+            service._git_clone("git+ssh://git@github.com/user/repo.git")
+
+    @patch("service.subprocess")
+    def test_setup_ssh_key_success(self, mock_subprocess, tmp_path):
+        """Test _setup_ssh_key writes key correctly."""
+        # Use a temporary file for testing
+        test_ssh_key_file = tmp_path / "id_rsa"
+
+        with patch("service.SSH_KEY_FILE", test_ssh_key_file):
+            ssh_key = "-----BEGIN RSA PRIVATE KEY-----\ntest\n-----END RSA PRIVATE KEY-----"
+            service._setup_ssh_key(ssh_key)
+
+            assert test_ssh_key_file.exists()
+            assert test_ssh_key_file.read_text() == ssh_key
+            # Check permissions (0o600)
+            assert oct(os.stat(test_ssh_key_file).st_mode)[-3:] == "600"
+
+    def test_setup_ssh_key_write_error(self, tmp_path):
+        """Test _setup_ssh_key handles write error."""
+        # Use a read-only directory
+        readonly_dir = tmp_path / "readonly"
+        readonly_dir.mkdir()
+        readonly_dir.chmod(0o444)
+        test_ssh_key_file = readonly_dir / "id_rsa"
+
+        with patch("service.SSH_KEY_FILE", test_ssh_key_file), pytest.raises(SshKeyWriteError):
+            service._setup_ssh_key("test key")
+
+        # Cleanup
+        readonly_dir.chmod(0o755)
+
+    @patch("service.subprocess")
+    def test_add_known_hosts_success(self, mock_subprocess, tmp_path):
+        """Test _add_known_hosts adds host key."""
+        test_known_hosts = tmp_path / "known_hosts"
+
+        mock_subprocess.check_output.return_value = b"github.com ssh-rsa AAAA..."
+
+        with patch("service.KNOWN_HOSTS_FILE", test_known_hosts):
+            service._add_known_hosts("github.com")
+
+            assert test_known_hosts.exists()
+            assert "github.com ssh-rsa AAAA..." in test_known_hosts.read_text()
+
+    @patch("service.subprocess.check_output")
+    def test_add_known_hosts_keyscan_error(self, mock_check_output):
+        """Test _add_known_hosts handles keyscan error."""
+        mock_check_output.side_effect = subprocess.CalledProcessError(1, "ssh-keyscan")
+
+        with pytest.raises(SshKeyScanError):
+            service._add_known_hosts("github.com")
+
+    @patch("service.subprocess.check_output")
+    def test_add_known_hosts_write_error(self, mock_check_output, tmp_path):
+        """Test _add_known_hosts handles write error."""
+        readonly_dir = tmp_path / "readonly"
+        readonly_dir.mkdir()
+        readonly_dir.chmod(0o444)
+        test_known_hosts = readonly_dir / "known_hosts"
+
+        mock_check_output.return_value = b"host key"
+
+        with patch("service.KNOWN_HOSTS_FILE", test_known_hosts), pytest.raises(SshKeyScanError):
+            # OSError is caught and re-raised as SshKeyScanError
+            service._add_known_hosts("github.com")
+
+        # Cleanup
+        readonly_dir.chmod(0o755)
+
+    @patch("service.subprocess")
+    def test_get_cloned_repo_url_success(self, mock_subprocess):
+        """Test _get_cloned_repo_url returns URL."""
+        mock_subprocess.check_output.return_value = b"git+ssh://git@github.com/user/repo.git\n"
+
+        url = service._get_cloned_repo_url()
+        assert url == "git+ssh://git@github.com/user/repo.git"
+
+    @patch("service.subprocess.check_output")
+    def test_get_cloned_repo_url_not_cloned(self, mock_check_output):
+        """Test _get_cloned_repo_url when repo not cloned."""
+        mock_check_output.side_effect = subprocess.CalledProcessError(1, "git")
+
+        url = service._get_cloned_repo_url()
+        assert url == ""
+
+    @patch("service.subprocess")
+    def test_get_cloned_repo_tag_success(self, mock_subprocess):
+        """Test _get_cloned_repo_tag returns tag."""
+        mock_subprocess.check_output.return_value = b"v1.0.0\n"
+
+        tag = service._get_cloned_repo_tag()
+        assert tag == "v1.0.0"
+
+    @patch("service.subprocess.check_output")
+    def test_get_cloned_repo_tag_no_tag(self, mock_check_output):
+        """Test _get_cloned_repo_tag when no tag exists."""
+        mock_check_output.side_effect = subprocess.CalledProcessError(1, "git")
+
+        tag = service._get_cloned_repo_tag()
+        assert tag == ""
+
+    @patch("service.subprocess")
+    def test_git_sync_already_synced(self, mock_subprocess):
+        """Test _git_sync returns early if repo already synced."""
+
+        # Mock that repo is already cloned with same URL and tag
+        def check_output_side_effect(cmd, *args, **kwargs):
+            if "config" in cmd:
+                return b"git+ssh://git@github.com/user/repo.git\n"
+            elif "describe" in cmd:
+                return b"v1.0\n"
+            return b""
+
+        mock_subprocess.check_output.side_effect = check_output_side_effect
+
+        result = service._git_sync(
+            "git+ssh://git@github.com/user/repo.git", "github.com", ref="v1.0"
+        )
+
+        assert result is True
+        # Should not call run (git clone) if already synced
+        mock_subprocess.run.assert_not_called()
+
+    @patch("service.subprocess.check_output")
+    @patch("service.subprocess.run")
+    def test_git_sync_with_ssh_key(self, mock_run, mock_check_output, tmp_path):
+        """Test _git_sync sets up SSH key when provided."""
+        test_ssh_key_file = tmp_path / "id_rsa"
+        test_known_hosts = tmp_path / "known_hosts"
+
+        with (
+            patch("service.SSH_KEY_FILE", test_ssh_key_file),
+            patch("service.KNOWN_HOSTS_FILE", test_known_hosts),
+        ):
+            # Mock check_output calls: repo URL check, tag check, and keyscan
+            # _git_sync calls _get_cloned_repo_url, _get_cloned_repo_tag, and _add_known_hosts
+            mock_check_output.side_effect = [
+                subprocess.CalledProcessError(1, "git"),  # get_cloned_repo_url
+                subprocess.CalledProcessError(1, "git"),  # get_cloned_repo_tag
+                b"github.com ssh-rsa AAAA...\n",  # add_known_hosts
+            ]
+
+            service._git_sync(
+                "git+ssh://git@github.com/user/repo.git", "github.com", ssh_private_key="test-key"
+            )
+
+            # Verify SSH key was written
+            assert test_ssh_key_file.exists()
+            assert test_ssh_key_file.read_text() == "test-key"
+
+    @patch("service.subprocess.check_output")
+    @patch("service.subprocess.run")
+    def test_git_sync_without_ssh_key(self, mock_run, mock_check_output, tmp_path):
+        """Test _git_sync without SSH key (e.g., public repo)."""
+        test_known_hosts = tmp_path / "known_hosts"
+
+        with patch("service.KNOWN_HOSTS_FILE", test_known_hosts):
+            # Mock check_output calls
+            mock_check_output.side_effect = [
+                subprocess.CalledProcessError(1, "git"),  # get_cloned_repo_url
+                subprocess.CalledProcessError(1, "git"),  # get_cloned_repo_tag
+                b"github.com ssh-rsa AAAA...\n",  # add_known_hosts
+            ]
+
+            # Call without ssh_private_key parameter
+            service._git_sync("https://github.com/user/repo.git", "github.com")
+
+            # Verify git clone was called
+            mock_run.assert_called_once()

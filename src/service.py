@@ -263,7 +263,7 @@ class FalcoCustomSetting:
         logger.info("Configuring Falco custom settings")
 
         # Sync custom configuration repository
-        self._git_sync(
+        _git_sync(
             str(charm_state.custom_config_repo),
             str(charm_state.custom_config_repo.host),
             ref=charm_state.custom_config_repo_ref,
@@ -271,178 +271,10 @@ class FalcoCustomSetting:
         )
 
         # Pull configuration files from the custom repository to falco config directories
-        self._pull_falco_rule_files()
-        self._pull_falco_config_files()
+        _pull_falco_rule_files(f"{self.falco_layout.rules_dir}/")
+        _pull_falco_config_files(f"{self.falco_layout.configs_dir}/")
 
         logger.info("Falco custom settings configured")
-
-    def _pull_falco_rule_files(self) -> None:
-        """Pull falco config files from custom config repository.
-
-        Raises:
-            RsyncError: If rsync fails
-        """
-        source = f"{CLONE_OUTPUT_DIR}/{FALCO_CUSTOM_RULES_KEY}/"
-        destination = f"{self.falco_layout.rules_dir}/"
-        rsync_cmd = [
-            RSYNC,
-            "-av",
-            "--delete",
-            "--include=*.yaml",
-            source,
-            destination,
-        ]
-        try:
-            logger.error("Rsync command: %s", rsync_cmd)
-            subprocess.run(rsync_cmd, check=True)
-        except subprocess.CalledProcessError as e:
-            logging.error("Rsync failed from %s to %s", source, destination)
-            raise RsyncError(f"Rsync failed: {e.stderr}") from e
-
-    def _pull_falco_config_files(self) -> None:
-        """Pull falco config files from custom config repository.
-
-        Raises:
-            RsyncError: If rsync fails
-        """
-        source = f"{CLONE_OUTPUT_DIR}/{FALCO_CUSTOM_CONFIGS_KEY}/"
-        destination = f"{self.falco_layout.configs_dir}/"
-        rsync_cmd = [
-            RSYNC,
-            "-av",
-            "--delete",
-            "--include=*.yaml",
-            source,
-            destination,
-        ]
-        try:
-            subprocess.run(rsync_cmd, check=True)
-        except subprocess.CalledProcessError as e:
-            logging.error("Rsync failed from %s to %s", source, destination)
-            raise RsyncError(f"Rsync failed: {e.stderr}") from e
-
-    def _git_sync(
-        self,
-        repo: str,
-        hostname: str,
-        ref: str = "",
-        ssh_private_key: str = "",
-    ) -> bool:
-        """Sync the repository to the specified destination.
-
-        Args:
-            repo (str): The repository URL
-            hostname (str): The host to scan for Ssh key
-            ref (str): The branch or tag to checkout
-            ssh_private_key (str): The SSH private key content
-
-        Returns:
-            True if the repository was already synced or synced successfully, False otherwise
-
-        Raises:
-            GitCloneError: If git clone fails
-            SshKeyScanError: If ssh-keyscan fails
-            SshKeyWriteError: If writing the Ssh key fails
-        """
-        repo_cloned = repo == self._get_cloned_repo_url()
-        repo_tag_matched = ref == self._get_cloned_repo_tag()
-        if repo_cloned and repo_tag_matched:
-            logger.info("Custom config repository already synced")
-            return True
-
-        if ssh_private_key:
-            self._setup_ssh_key(ssh_private_key)
-
-        self._add_known_hosts(hostname)
-        self._git_clone(repo, ref=ref)
-
-        return True
-
-    def _setup_ssh_key(self, ssh_private_key: str) -> None:
-        """Add the SSH private key to the host.
-
-        Args:
-            ssh_private_key (str): The SSH private key content
-
-        Raises:
-            SshKeyWriteError: If writing the Ssh key fails
-        """
-        try:
-            with SSH_KEY_FILE.open("w", encoding="utf-8") as key_file:
-                key_file.write(ssh_private_key)
-            SSH_KEY_FILE.chmod(0o600)
-        except OSError as e:
-            logging.error("Error writing SSH private key to %s", SSH_KEY_FILE)
-            raise SshKeyWriteError(f"Error writing SSH key to {SSH_KEY_FILE}") from e
-
-    def _add_known_hosts(self, hostname: str) -> None:
-        """Scan and add the Ssh host key to known_hosts.
-
-        Args:
-            hostname (str): The host to scan
-
-        Raises:
-            SshKeyScanError: If ssh-keyscan fails
-        """
-        add_known_hosts_cmd = [SSH_KEYSCAN, "-t", "rsa", hostname]
-        try:
-            out = subprocess.check_output(add_known_hosts_cmd).decode()
-            with KNOWN_HOSTS_FILE.open("w", encoding="utf-8") as known_hosts_file:
-                known_hosts_file.write(out)
-        except subprocess.CalledProcessError as e:
-            logging.error("'%s' failed for host %s", SSH_KEYSCAN, hostname)
-            raise SshKeyScanError(f"{SSH_KEYSCAN} failed for host {hostname}") from e
-        except OSError as e:
-            logging.error("Error writing to known hosts at %s", KNOWN_HOSTS_FILE)
-            raise SshKeyScanError(f"Error writing to known hosts at {KNOWN_HOSTS_FILE}") from e
-
-    def _git_clone(self, repo: str, ref: str = "") -> None:
-        """Clone a git repository using with depth 1.
-
-        Args:
-            repo (str): The repository URL
-            ref (str): The branch or tag to checkout
-
-        Raises:
-            GitCloneError: If git clone fails
-        """
-        git_clone_cmd = [GIT, "clone", "--depth", "1", repo, str(CLONE_OUTPUT_DIR)]
-        git_clone_cmd += ["-b", ref] if ref else []
-
-        try:
-            shutil.rmtree(CLONE_OUTPUT_DIR, ignore_errors=True)
-            subprocess.run(git_clone_cmd, check=True)
-        except subprocess.CalledProcessError as e:
-            logging.error("Error cloning repository %s", repo)
-            raise GitCloneError(f"Error cloning repository {repo}") from e
-
-    def _get_cloned_repo_url(self) -> str:
-        """Get the cloned repository URL.
-
-        Returns:
-            The repository URL as a string or empty string if the repository is not cloned.
-        """
-        cmd = [GIT, "-C", str(CLONE_OUTPUT_DIR), "config", "--get", "remote.origin.url"]
-        try:
-            url = subprocess.check_output(cmd).decode()
-        except subprocess.CalledProcessError as e:
-            logger.debug(e)
-            return ""
-        return url.strip()
-
-    def _get_cloned_repo_tag(self) -> str:
-        """Get the cloned repository tag.
-
-        Returns:
-            The repository tag as a string or empty string if the repository is not cloned.
-        """
-        cmd = [GIT, "-C", str(CLONE_OUTPUT_DIR), "describe", "--tags", "--exact-match"]
-        try:
-            tag = subprocess.check_output(cmd).decode()
-        except subprocess.CalledProcessError as e:
-            logger.debug(e)
-            return ""
-        return tag.strip()
 
 
 class FalcoService:
@@ -508,3 +340,182 @@ class FalcoService:
     def check_active(self) -> bool:
         """Check if the Falco service is active."""
         return systemd.service_running(self.service_file.service_name)
+
+
+def _pull_falco_rule_files(destination: str) -> None:
+    """Pull falco config files from custom config repository.
+
+    Args:
+        destination (str): The destination directory for the pulled files
+
+    Raises:
+        RsyncError: If rsync fails
+    """
+    source = f"{CLONE_OUTPUT_DIR}/{FALCO_CUSTOM_RULES_KEY}/"
+    rsync_cmd = [
+        RSYNC,
+        "-av",
+        "--delete",
+        "--include=*.yaml",
+        source,
+        destination,
+    ]
+    try:
+        logger.error("Rsync command: %s", rsync_cmd)
+        subprocess.run(rsync_cmd, check=True)
+    except subprocess.CalledProcessError as e:
+        logging.error("Rsync failed from %s to %s", source, destination)
+        raise RsyncError(f"Rsync failed: {e.stderr}") from e
+
+
+def _pull_falco_config_files(destination: str) -> None:
+    """Pull falco config files from custom config repository.
+
+    Args:
+        destination (str): The destination directory for the pulled files
+
+    Raises:
+        RsyncError: If rsync fails
+    """
+    source = f"{CLONE_OUTPUT_DIR}/{FALCO_CUSTOM_CONFIGS_KEY}/"
+    rsync_cmd = [
+        RSYNC,
+        "-av",
+        "--delete",
+        "--include=*.yaml",
+        source,
+        destination,
+    ]
+    try:
+        subprocess.run(rsync_cmd, check=True)
+    except subprocess.CalledProcessError as e:
+        logging.error("Rsync failed from %s to %s", source, destination)
+        raise RsyncError(f"Rsync failed: {e.stderr}") from e
+
+
+def _git_sync(
+    repo: str,
+    hostname: str,
+    ref: str = "",
+    ssh_private_key: str = "",
+) -> bool:
+    """Sync the repository to the specified destination.
+
+    Args:
+        repo (str): The repository URL
+        hostname (str): The host to scan for Ssh key
+        ref (str): The branch or tag to checkout
+        ssh_private_key (str): The SSH private key content
+
+    Returns:
+        True if the repository was already synced or synced successfully, False otherwise
+
+    Raises:
+        GitCloneError: If git clone fails
+        SshKeyScanError: If ssh-keyscan fails
+        SshKeyWriteError: If writing the Ssh key fails
+    """
+    repo_cloned = repo == _get_cloned_repo_url()
+    repo_tag_matched = ref == _get_cloned_repo_tag()
+    if repo_cloned and repo_tag_matched:
+        logger.info("Custom config repository already synced")
+        return True
+
+    if ssh_private_key:
+        _setup_ssh_key(ssh_private_key)
+
+    _add_known_hosts(hostname)
+    _git_clone(repo, ref=ref)
+
+    return True
+
+
+def _setup_ssh_key(ssh_private_key: str) -> None:
+    """Add the SSH private key to the host.
+
+    Args:
+        ssh_private_key (str): The SSH private key content
+
+    Raises:
+        SshKeyWriteError: If writing the Ssh key fails
+    """
+    try:
+        with SSH_KEY_FILE.open("w", encoding="utf-8") as key_file:
+            key_file.write(ssh_private_key)
+        SSH_KEY_FILE.chmod(0o600)
+    except OSError as e:
+        logging.error("Error writing SSH private key to %s", SSH_KEY_FILE)
+        raise SshKeyWriteError(f"Error writing SSH key to {SSH_KEY_FILE}") from e
+
+
+def _add_known_hosts(hostname: str) -> None:
+    """Scan and add the Ssh host key to known_hosts.
+
+    Args:
+        hostname (str): The host to scan
+
+    Raises:
+        SshKeyScanError: If ssh-keyscan fails
+    """
+    add_known_hosts_cmd = [SSH_KEYSCAN, "-t", "rsa", hostname]
+    try:
+        out = subprocess.check_output(add_known_hosts_cmd).decode()
+        with KNOWN_HOSTS_FILE.open("w", encoding="utf-8") as known_hosts_file:
+            known_hosts_file.write(out)
+    except subprocess.CalledProcessError as e:
+        logging.error("'%s' failed for host %s", SSH_KEYSCAN, hostname)
+        raise SshKeyScanError(f"{SSH_KEYSCAN} failed for host {hostname}") from e
+    except OSError as e:
+        logging.error("Error writing to known hosts at %s", KNOWN_HOSTS_FILE)
+        raise SshKeyScanError(f"Error writing to known hosts at {KNOWN_HOSTS_FILE}") from e
+
+
+def _git_clone(repo: str, ref: str = "") -> None:
+    """Clone a git repository using with depth 1.
+
+    Args:
+        repo (str): The repository URL
+        ref (str): The branch or tag to checkout
+
+    Raises:
+        GitCloneError: If git clone fails
+    """
+    git_clone_cmd = [GIT, "clone", "--depth", "1", repo, str(CLONE_OUTPUT_DIR)]
+    git_clone_cmd += ["-b", ref] if ref else []
+
+    try:
+        shutil.rmtree(CLONE_OUTPUT_DIR, ignore_errors=True)
+        subprocess.run(git_clone_cmd, check=True)
+    except subprocess.CalledProcessError as e:
+        logging.error("Error cloning repository %s", repo)
+        raise GitCloneError(f"Error cloning repository {repo}") from e
+
+
+def _get_cloned_repo_url() -> str:
+    """Get the cloned repository URL.
+
+    Returns:
+        The repository URL as a string or empty string if the repository is not cloned.
+    """
+    cmd = [GIT, "-C", str(CLONE_OUTPUT_DIR), "config", "--get", "remote.origin.url"]
+    try:
+        url = subprocess.check_output(cmd).decode()
+    except subprocess.CalledProcessError as e:
+        logger.debug(e)
+        return ""
+    return url.strip()
+
+
+def _get_cloned_repo_tag() -> str:
+    """Get the cloned repository tag.
+
+    Returns:
+        The repository tag as a string or empty string if the repository is not cloned.
+    """
+    cmd = [GIT, "-C", str(CLONE_OUTPUT_DIR), "describe", "--tags", "--exact-match"]
+    try:
+        tag = subprocess.check_output(cmd).decode()
+    except subprocess.CalledProcessError as e:
+        logger.debug(e)
+        return ""
+    return tag.strip()
