@@ -17,6 +17,7 @@ header:
   - '**/*.txt'
   - '.jujuignore'
   - '.gitignore'
+  - '.trivyignore'
   - '.licenserc.yaml'
   - 'CODEOWNERS'
   - 'LICENSE'
