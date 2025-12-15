@@ -3,7 +3,10 @@
 
 """Unit tests for Falco charm."""
 
+from unittest.mock import PropertyMock, patch
+
 import ops
+import pytest
 from ops import testing
 
 from charm import FalcosidekickCharm
@@ -40,3 +43,34 @@ class TestCharm:
 
         # Assert: Verify that the unit status is set to ActiveStatus
         assert state_out.unit_status == ops.WaitingStatus("Workload not ready")
+
+    @patch("charm.Falcosidekick.health", new_callable=PropertyMock)
+    def test_on_falcosidekick_workload_healthy(self, mock_falcosidekick_health):
+        """Test falcosidekick workload is healthy."""
+        # Arrange: Set up the mock container to simulate a successful connection
+        ctx = testing.Context(FalcosidekickCharm)
+        # mypy thinks this can_connect argument does not exist.
+        container = testing.Container(Falcosidekick.container_name, can_connect=True)  # type: ignore
+        mock_falcosidekick_health.return_value = True
+        state_in = testing.State(containers=[container])
+
+        # Act: Create a testing context and run the event
+        state_out = ctx.run(ctx.on.pebble_ready(container=container), state_in)
+
+        # Assert: Verify that the unit status is set to ActiveStatus
+        assert state_out.unit_status == ops.ActiveStatus()
+
+    @patch("charm.Falcosidekick.health", new_callable=PropertyMock)
+    def test_on_falcosidekick_workload_not_healthy(self, mock_falcosidekick_health):
+        """Test falcosidekick workload is not healthy."""
+        # Arrange: Set up the mock container to simulate a successful connection
+        ctx = testing.Context(FalcosidekickCharm)
+        # mypy thinks this can_connect argument does not exist.
+        container = testing.Container(Falcosidekick.container_name, can_connect=True)  # type: ignore
+        mock_falcosidekick_health.return_value = False
+        state_in = testing.State(containers=[container])
+
+        # Act: Create a testing context and run the event
+        # Assert: Verify that the unit status is set to ActiveStatus
+        with pytest.raises(RuntimeError, match="Workload not healthy"):
+            _ = ctx.run(ctx.on.pebble_ready(container=container), state_in)

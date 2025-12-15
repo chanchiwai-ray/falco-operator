@@ -55,9 +55,8 @@ class FalcosidekickCharm(CharmBaseWithState):
         self.falcosidekick.configure()
 
         if not self.falcosidekick.health:
-            logger.warning("'%s' workload is not healthy", self.falcosidekick.container_name)
-            self.unit.status = ops.BlockedStatus("Workload not healthy")
-            return
+            logger.error("'%s' workload is not healthy", self.falcosidekick.container_name)
+            raise RuntimeError("Workload not healthy")
 
         self.unit.status = ops.ActiveStatus()
 
